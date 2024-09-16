@@ -106,9 +106,10 @@ jobs:
       - name: Setup Maven for SSH Connection
         run: |
           ghaRunnerURL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          sudo cat > /usr/bin/runnerinfo << EOF 
+          cat > runnerinfo << EOF 
           echo "${ghaRunnerURL}"
           EOF
+          sudo mv runnerinfo /usr/bin/
           sudo chmod +x /usr/bin/runnerinfo
           sudo cat > /usr/bin/mvn << EOF 
           . /etc/profile
