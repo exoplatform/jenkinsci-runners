@@ -76,7 +76,6 @@ jobs:
           maven-version: ${{ inputs.maven_version }}
       # Cache Maven Artifcats to boost up builds
       - name: Cache Maven artifacts
-        if: ${{ inputs.maximize_build_space == false }}
         uses: actions/cache@v4
         with:
           path: ~/.m2/repository
