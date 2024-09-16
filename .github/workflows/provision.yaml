@@ -108,13 +108,16 @@ jobs:
           /opt/hostedtoolcache/maven/${{ inputs.maven_version }}/x64/bin/mvn \$@
           EOF
           sudo chmod +x /usr/bin/mvn
-      - name: Print Information
+      - name: Print Build Information
         run: |
+          jobFolderName="$(echo ${{ inputs.JENKINS_JOB_NAME }} | cut -d '-' -f1 )"
+          jobName=$(echo ${{ inputs.JENKINS_JOB_NAME }} | sed -E "s/^${jobFolderName}-//g")
           echo "Used paramters:"
           echo "  - AGENT: ${{ inputs.AGENT_HOST }}"
           echo "  - AGENT FORWARD PORT: ${{ inputs.AGENT_FORWARD_PORT }}"
           echo "  - JENKINS JOB NAME: ${{ inputs.JENKINS_JOB_NAME }}"
           echo "  - JENKINS JOB BUILD NUMBER: ${{ inputs.JENKINS_JOB_BUILD_NUMBER }}"
+          echo "  - JENKINS JOB BUILD URL: https://ci.exoplatform.org/job/${jobFolderName}/job/${jobName}/${{ inputs.JENKINS_JOB_BUILD_NUMBER }}/"
           echo "  - MAVEN VERSION: ${{ inputs.maven_version }}"
           echo "  - JDK MAJOR VERSION: ${{ inputs.jdk_major_version }}"
           echo "  - JDK DISTRIBUTION: ${{ inputs.jdk_distribution }}"
