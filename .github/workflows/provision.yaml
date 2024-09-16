@@ -60,6 +60,7 @@ jobs:
           temp-reserve-mb: 2048
           swap-size-mb: 1024
           remove-dotnet: 'true'
+          remove-android: 'true'
       - name: Checkout repository
         uses: actions/checkout@v4
       # Setup JDK
@@ -74,12 +75,13 @@ jobs:
         with:
           maven-version: ${{ inputs.maven_version }}
       # Cache Maven Artifcats to boost up builds
-      # - name: Cache Maven artifacts
-      #   uses: actions/cache@v4
-      #   with:
-      #     path: ~/.m2/repository
-      #     key: ${{ inputs.JENKINS_JOB_NAME }}-m2-repository
-      #     restore-keys: ${{ runner.os }}-${{ inputs.JENKINS_JOB_NAME }}-m2-repository
+      - name: Cache Maven artifacts
+        if: ${{ inputs.maximize_build_space == false }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ inputs.JENKINS_JOB_NAME }}-m2-repository
+          restore-keys: ${{ runner.os }}-${{ inputs.JENKINS_JOB_NAME }}-m2-repository
       - name: Install SSH key
         uses: shimataro/ssh-key-action@v2
         with:
