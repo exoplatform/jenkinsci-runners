@@ -1,0 +1,135 @@
+name: "Jenkins CI Runners"
+on:
+  workflow_dispatch:
+    inputs:
+      AGENT_HOST:
+        description: agent host
+        required: true
+        type: string
+      AGENT_FORWARD_PORT:
+        description: agent forward port
+        required: true
+        type: string
+      JENKINS_JOB_NAME:
+        description: Jenkins Job Name
+        required: true
+        type: string
+      JENKINS_JOB_BUILD_NUMBER:
+        description: Jenkins Job Build Number
+        required: true
+        type: number
+      MAVEN_WAIT_TIMEOUT:
+        description: Maven startup wait timeout
+        required: false
+        default: 60
+        type: number
+      maven_version:
+        description: Maven version
+        default: "3.9.9"
+        required: false
+        type: string
+      jdk_major_version:
+        description: JDK Major version (eg 8, 11, 14, 17, 21,...)
+        default: 21
+        required: false
+        type: number
+      jdk_distribution:
+        description: OpenJDK Adopted Distribution (temurin, zulu, adopt, liberica,...)
+        default: "zulu"
+        required: false
+        type: string
+      maximize_build_space:
+        description: Maximize Build Space for Bigger Projects Unit tests based on files and blocks
+        type: boolean
+        required: false
+        default: false
+jobs:
+  provision:
+    name: "Build ${{ inputs.JENKINS_JOB_NAME }} #${{ inputs.JENKINS_JOB_BUILD_NUMBER }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      pull-requests: write
+    steps:
+      # Hack: Maximize Disk space for big & legacy projects (May become unsupported in future Azure runner releases)
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@v10
+        if: ${{ inputs.maximize_build_space == true }}
+        with:
+          root-reserve-mb: 2048
+          temp-reserve-mb: 2048
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      # Setup JDK
+      - name: Set up JDK ${{ inputs.jdk_major_version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.jdk_major_version }}
+          distribution: ${{ inputs.jdk_distribution }}
+      # Setup Maven
+      - name: Set up Maven ${{ inputs.maven_version }}
+        uses: stCarolas/setup-maven@v5
+        with:
+          maven-version: ${{ inputs.maven_version }}
+      # Cache Maven Artifcats to boost up builds
+      # - name: Cache Maven artifacts
+      #   uses: actions/cache@v4
+      #   with:
+      #     path: ~/.m2/repository
+      #     key: ${{ inputs.JENKINS_JOB_NAME }}-m2-repository
+      #     restore-keys: ${{ runner.os }}-${{ inputs.JENKINS_JOB_NAME }}-m2-repository
+      - name: Install SSH key
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.PRIVATE_KEY }}
+          known_hosts: ${{ secrets.KNOWN_HOSTS }}
+          config: |
+            Host ${{ inputs.AGENT_HOST }}
+            HostName ${{ inputs.AGENT_HOST }}
+            User ${{ secrets.USERNAME }}
+            Port ${{ secrets.PORT }}
+            StrictHostKeyChecking no
+      - name: Setup JDK Environment Variables
+        run: |
+          sudo update-alternatives --remove-all java
+          sudo update-alternatives --remove-all javac
+          ZULU_INSTALl_DIR=/opt/hostedtoolcache/Java_Zulu_jdk
+          JDK_DIR=$(ls "${ZULU_INSTALl_DIR}")
+          ZULU_JAVA_HOME="${ZULU_INSTALl_DIR}/${JDK_DIR}/x64"
+          echo "export JAVA_HOME=${ZULU_JAVA_HOME}" | sudo tee -a /etc/profile
+          sudo update-alternatives --install /usr/bin/java java ${ZULU_JAVA_HOME}/bin/java 9999
+          sudo update-alternatives --install /usr/bin/javac javac ${ZULU_JAVA_HOME}/bin/javac 9999
+      - name: Setup Maven for SSH Connection
+        run: |
+          sudo cat > /usr/bin/mvn << EOF 
+          . /etc/profile
+          /opt/hostedtoolcache/maven/${{ inputs.maven_version }}/x64/bin/mvn \$@
+          EOF
+          sudo chmod +x /usr/bin/mvn
+      - name: Print Information
+        run: |
+          echo "Used paramters:"
+          echo "  - AGENT: ${{ inputs.AGENT_HOST }}"
+          echo "  - AGENT FORWARD PORT: ${{ inputs.AGENT_FORWARD_PORT }}"
+          echo "  - JENKINS JOB NAME: ${{ inputs.JENKINS_JOB_NAME }}"
+          echo "  - JENKINS JOB BUILD NUMBER: ${{ inputs.JENKINS_JOB_BUILD_NUMBER }}"
+          echo "  - MAVEN VERSION: ${{ inputs.maven_version }}"
+          echo "  - JDK MAJOR VERSION: ${{ inputs.jdk_major_version }}"
+          echo "  - JDK DISTRIBUTION: ${{ inputs.jdk_distribution }}"
+          echo "  - MAXIMIZE BUILD SPACE: ${{ inputs.maximize_build_space }}"
+          echo "==="
+      - name: Connect to agent
+        run: |
+          chmod +x daemon.sh
+          echo "Staring agent daemon..."
+          ./daemon.sh
+        env: 
+          MAVEN_WAIT_TIMEOUT: ${{ inputs.MAVEN_WAIT_TIMEOUT }}
+          AGENT_HOST: ${{ inputs.AGENT_HOST }}
+          AGENT_FORWARD_PORT: ${{ inputs.AGENT_FORWARD_PORT }}
+      - name: Stop runner
+        if: always()
+        run: | 
+          echo "Job has been stopped"
