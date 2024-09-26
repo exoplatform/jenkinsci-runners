@@ -1,4 +1,10 @@
 #!/bin/bash -u
+watchSSHConnection() {
+  if ! ps -ef | grep 'runner@notty' | grep -q 'sshd'; then 
+    echo "Error: SSH connection is closed! Abort!"
+    exit 1
+  fi
+}
 echo "Forwarding SSH Port to Jenkins agent"
 ssh-keygen -y -f ~/.ssh/id* >> ~/.ssh/authorized_keys
 chmod 0600 ~/.ssh/authorized_keys
@@ -23,6 +29,7 @@ MVN_PID=$(cat ${MVN_PID_FILE})
 while kill -0 ${MVN_PID} &>/dev/null; do 
   sleep 5 
   echo "OK Maven is running, Wrapper PID=${MVN_PID}"
+  watchSSHConnection
 done
 echo "Maven build is finished! Stopping ssh agent..."
 sleep 10 # wait for jenkins to close ssh connection
