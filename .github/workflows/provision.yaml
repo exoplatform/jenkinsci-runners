@@ -48,8 +48,10 @@ jobs:
     name: "Build ${{ inputs.JENKINS_JOB_NAME }} #${{ inputs.JENKINS_JOB_BUILD_NUMBER }}"
     runs-on: ubuntu-24.04
     timeout-minutes: 120
-    permissions:
-      pull-requests: write
+    concurrency:
+      group: ${{ inputs.JENKINS_JOB_NAME }}
+      cancel-in-progress: true
+
     steps:
       # Hack: Maximize Disk space for big & legacy projects (May become unsupported in future Azure runner releases)
       - name: Maximize build space
