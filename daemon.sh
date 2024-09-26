@@ -1,6 +1,6 @@
 #!/bin/bash -u
 watchSSHConnection() {
-  if [ -z "$(ps -ef | grep 'ssh' | grep 'localhost' | grep -v '\-R')" ]; then 
+  if ! ps -ef | grep 'ssh' | grep 'localhost' | grep -qv '\-R'; then 
     echo "Error: SSH connection is closed! Abort!"
     exit 1
   fi
