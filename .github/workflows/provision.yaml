@@ -112,10 +112,12 @@ jobs:
           EOF
           sudo mv runnerinfo /usr/bin/
           sudo chmod +x /usr/bin/runnerinfo
-          sudo cat > /usr/bin/mvn << EOF 
+          cat > mvn << EOF 
           . /etc/profile
+          echo $$ > /tmp/.mvnpid
           /opt/hostedtoolcache/maven/${{ inputs.maven_version }}/x64/bin/mvn \$@
           EOF
+          sudo mv mvn /usr/bin/
           sudo chmod +x /usr/bin/mvn
       - name: Print Build Information
         run: |
