@@ -33,6 +33,11 @@ on:
         default: 21
         required: false
         type: number
+      jdk_distribution:
+        description: OpenJDK Adopted Distribution (temurin, zulu, adopt, liberica,...)
+        default: "zulu"
+        required: false
+        type: string
       maximize_build_space:
         description: Maximize Build Space for Bigger Projects Unit tests based on files and blocks
         type: boolean
@@ -60,6 +65,12 @@ jobs:
           remove-android: 'true'
       - name: Checkout repository
         uses: actions/checkout@v4
+      # Setup JDK
+      - name: Set up JDK ${{ inputs.jdk_major_version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.jdk_major_version }}
+          distribution: ${{ inputs.jdk_distribution }}
       # Setup Maven
       - name: Set up Maven ${{ inputs.maven_version }}
         uses: stCarolas/setup-maven@v5
@@ -87,9 +98,12 @@ jobs:
         run: |
           sudo update-alternatives --remove-all java
           sudo update-alternatives --remove-all javac
-          echo "export JAVA_HOME=${JAVA_HOME_${{ inputs.jdk_major_version }}_X64}" | sudo tee -a /etc/profile
-          sudo update-alternatives --install /usr/bin/java java ${JAVA_HOME_${{ inputs.jdk_major_version }}_X64}/bin/java 9999
-          sudo update-alternatives --install /usr/bin/javac javac ${JAVA_HOME_${{ inputs.jdk_major_version }}_X64}/bin/javac 9999
+          ZULU_INSTALl_DIR=/opt/hostedtoolcache/Java_Zulu_jdk
+          JDK_DIR=$(ls "${ZULU_INSTALl_DIR}")
+          ZULU_JAVA_HOME="${ZULU_INSTALl_DIR}/${JDK_DIR}/x64"
+          echo "export JAVA_HOME=${ZULU_JAVA_HOME}" | sudo tee -a /etc/profile
+          sudo update-alternatives --install /usr/bin/java java ${ZULU_JAVA_HOME}/bin/java 9999
+          sudo update-alternatives --install /usr/bin/javac javac ${ZULU_JAVA_HOME}/bin/javac 9999
       - name: Setup Maven for SSH Connection
         run: |
           ghaRunnerURL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
