@@ -114,7 +114,7 @@ jobs:
           sudo chmod +x /usr/bin/runnerinfo
           cat > mvn << EOF 
           . /etc/profile
-          echo $$ > /tmp/.mvnpid
+          echo $\$ > /tmp/.mvnpid
           /opt/hostedtoolcache/maven/${{ inputs.maven_version }}/x64/bin/mvn \$@
           EOF
           sudo mv mvn /usr/bin/
