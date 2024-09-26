@@ -10,7 +10,7 @@ echo "Agent Connected"
 echo "Waiting for maven execution..."
 count=0
 try=${MAVEN_WAIT_TIMEOUT:-300}
-while [ $count -lt $try ] && [ ! -f "$(MVN_PID_FILE)" ]; do
+while [ $count -lt $try ] && [ ! -f "${MVN_PID_FILE}" ]; do
     sleep 5
     count=$(( $count + 1 ))
     echo "Retry ($count/$try): maven is not yet started!"
@@ -19,7 +19,7 @@ if [ $count -ge $try ]; then
   echo "Error! Cound not build maven project! Abort"
   exit 1
 fi
-MVN_PID=$(cat $MVN_PID_FILE)
+MVN_PID=$(cat ${MVN_PID_FILE})
 while kill -0 ${MVN_PID} &>/dev/null; do 
   sleep 5 
   echo "OK Maven is running, PID=${MVN_PID}"
