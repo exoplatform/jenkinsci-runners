@@ -1,0 +1,52 @@
+name: "Generate maven cache"
+on:
+  workflow_dispatch: 
+  schedule:
+    - cron: "0 0 * * *"
+env:
+  jdk_major_version: 21
+  maven_version: 3.9.9
+  repos_list: "Meeds-io/maven-parent-pom Meeds-io/maven-depmgt-pom Meeds-io/kernel Meeds-io/gatein-portal Meeds-io/commons Meeds-io/social Meeds-io/meeds"
+jobs:
+  cache:
+    name: "Cache maven artifacts"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    concurrency:
+      group: cache-artifacts
+      cancel-in-progress: true
+
+    steps:
+      - name: Setup JDK Environment Variables
+        run: |
+          sudo update-alternatives --remove-all java
+          sudo update-alternatives --remove-all javac
+          echo "export JAVA_HOME=${JAVA_HOME_${{ env.jdk_major_version }}_X64}" | sudo tee -a /etc/profile
+          sudo update-alternatives --install /usr/bin/java java ${JAVA_HOME_${{ env.jdk_major_version }}_X64}/bin/java 9999
+          sudo update-alternatives --install /usr/bin/javac javac ${JAVA_HOME_${{ env.jdk_major_version }}_X64}/bin/javac 9999
+      # Setup Maven
+      - name: Set up Maven ${{ env.maven_version }}
+        uses: stCarolas/setup-maven@v5
+        with:
+          maven-version: ${{ env.maven_version }}
+      - name: Download maven artifacts
+        run: |
+          for fullrepo in ${repos_list}; do 
+             repo=$(echo $fullrepo | cut -d '/' -f2)
+             git clone --depth 1 https://github.com/${fullrepo}
+             cd $repo
+             mvn -B dependency:go-offline
+             cd ..
+             rm -rf $repo
+          done
+      - name: Cleanup Meeds and eXo artifcats
+        run: |
+          rm -rf ~/.m2/repository/io/meeds
+          rm -rf ~/.m2/repository/org/exoplatform
+          rm -rf ~/.m2/repository/com/exoplatform
+      # Save Maven Artifcats Cache to boost up builds
+      - name: Save Maven artifacts Cache
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.m2/repository
+          key: generic-m2-repository
