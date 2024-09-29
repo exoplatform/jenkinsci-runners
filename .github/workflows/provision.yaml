@@ -115,22 +115,10 @@ jobs:
           cat > mvn << EOF 
           . /etc/profile
           echo $\$ > /tmp/.mvnpid
-          /opt/hostedtoolcache/maven/${{ inputs.maven_version }}/x64/bin/mvn \$@
+          /opt/hostedtoolcache/maven/${{ inputs.maven_version }}/x64/bin/mvn -V \$@
           EOF
           sudo mv mvn /usr/bin/
           sudo chmod +x /usr/bin/mvn
-      - name: Print Build Information
-        run: |
-          jobFolderName="$(echo ${{ inputs.JENKINS_JOB_NAME }} | cut -d '-' -f1 )"
-          jobName=$(echo ${{ inputs.JENKINS_JOB_NAME }} | sed -E "s/^${jobFolderName}-//g")
-          echo "Used paramters:"
-          echo "  - JENKINS JOB NAME: ${{ inputs.JENKINS_JOB_NAME }}"
-          echo "  - JENKINS JOB BUILD NUMBER: ${{ inputs.JENKINS_JOB_BUILD_NUMBER }}"
-          echo "  - JENKINS JOB BUILD URL: https://ci.exoplatform.org/job/${jobFolderName}/job/${jobName}/${{ inputs.JENKINS_JOB_BUILD_NUMBER }}/"
-          echo "  - MAXIMIZE BUILD SPACE: ${{ inputs.maximize_build_space }}"
-          echo "==="
-          chmod +x printbuildenv.sh
-          ./printbuildenv.sh
       - name: Init gnupg for signing artifacts
         run: |
           chmod +x initgpg.sh
