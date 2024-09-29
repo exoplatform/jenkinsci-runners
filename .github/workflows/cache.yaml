@@ -4,7 +4,7 @@ on:
   schedule:
     - cron: "0 0 * * *"
 env:
-  SETTINGS_XML_URL: 'http://storage.exoplatform.org/public/githubci/maven-settings.xml'
+  SETTINGS_XML_URL: 'http://storage.exoplatform.org/public/githubci/maven-settings-jenkinsci.xml'
   jdk_major_version: 21
   maven_version: 3.9.9
   repos_list: "Meeds-io/maven-parent-pom Meeds-io/maven-depmgt-pom Meeds-io/kernel Meeds-io/gatein-portal Meeds-io/commons Meeds-io/social Meeds-io/meeds"
