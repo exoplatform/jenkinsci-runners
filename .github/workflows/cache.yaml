@@ -52,6 +52,7 @@ jobs:
           rm -rf ~/.m2/repository/io/meeds
           rm -rf ~/.m2/repository/org/exoplatform
           rm -rf ~/.m2/repository/com/exoplatform
+          find ~/.m2/repository -name _maven.repositories -exec rm -v {} \;
       # Save Maven Artifcats Cache to boost up builds
       - name: Save Maven artifacts Cache
         uses: actions/cache/save@v4
