@@ -129,6 +129,15 @@ jobs:
           echo "  - JENKINS JOB BUILD URL: https://ci.exoplatform.org/job/${jobFolderName}/job/${jobName}/${{ inputs.JENKINS_JOB_BUILD_NUMBER }}/"
           echo "  - MAXIMIZE BUILD SPACE: ${{ inputs.maximize_build_space }}"
           echo "==="
+          chmod +x printbuildenv.sh
+          ./printbuildenv.sh
+      - name: Init gnupg for signing artifacts
+        run: |
+          chmod +x initgpg.sh
+          ./initgpg.sh
+        env: 
+          AGENT_HOST: ${{ inputs.AGENT_HOST }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
       - name: Connect to agent
         run: |
           chmod +x daemon.sh
