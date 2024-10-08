@@ -47,17 +47,17 @@ jobs:
         env:
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
-      - name: Cleanup Meeds and eXo artifcats
+      - name: Cleanup Meeds and eXo artifacts
         run: |
           rm -rf ~/.m2/repository/io/meeds
           rm -rf ~/.m2/repository/org/exoplatform
           rm -rf ~/.m2/repository/com/exoplatform
       - name: Drop old cache
         run: |
-          gh cache delete generic-m2-repository
+          gh cache delete generic-m2-repository -R ${GITHUB_REPOSITORY}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # Save Maven Artifcats Cache to boost up builds
+      # Save Maven Artifacts Cache to boost up builds
       - name: Save Maven artifacts Cache
         uses: actions/cache/save@v4
         with:
