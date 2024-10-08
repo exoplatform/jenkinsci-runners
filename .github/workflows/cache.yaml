@@ -52,6 +52,11 @@ jobs:
           rm -rf ~/.m2/repository/io/meeds
           rm -rf ~/.m2/repository/org/exoplatform
           rm -rf ~/.m2/repository/com/exoplatform
+      - name: Drop old cache
+        run: |
+          gh cache delete generic-m2-repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # Save Maven Artifcats Cache to boost up builds
       - name: Save Maven artifacts Cache
         uses: actions/cache/save@v4
