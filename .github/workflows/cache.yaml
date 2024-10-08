@@ -7,7 +7,21 @@ env:
   SETTINGS_XML_URL: 'http://storage.exoplatform.org/public/githubci/maven-settings-jenkinsci.xml'
   jdk_major_version: 21
   maven_version: 3.9.9
-  repos_list: "Meeds-io/maven-parent-pom Meeds-io/maven-depmgt-pom Meeds-io/kernel Meeds-io/gatein-portal Meeds-io/commons Meeds-io/social Meeds-io/meeds"
+  repos_list: |
+    Meeds-io/maven-parent-pom 
+    Meeds-io/maven-depmgt-pom
+    Meeds-io/kernel
+    Meeds-io/gatein-portal
+    Meeds-io/commons
+    Meeds-io/social
+    Meeds-io/meeds
+    exoplatform/maven-exo-parent-pom
+    exoplatform/maven-exo-depmgt-pom
+    exoplatform/commons-exo
+    exoplatform/jcr
+    exoplatform/ecms
+    exoplatform/documents
+    exoplatform/platform-public-distributions
 jobs:
   cache:
     name: "Cache maven artifacts"
@@ -36,14 +50,14 @@ jobs:
           wget -q "${SETTINGS_XML_URL}" -O ~/.m2/settings.xml
       - name: Download maven artifacts
         run: |
-          for fullrepo in ${repos_list}; do 
+          while IFS= read -r fullrepo; do 
              repo=$(echo $fullrepo | cut -d '/' -f2)
              git clone --depth 1 https://github.com/${fullrepo}
              cd $repo
              mvn -B dependency:go-offline
              cd ..
              rm -rf $repo
-          done
+          done <<< "$repos_list"
         env:
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
