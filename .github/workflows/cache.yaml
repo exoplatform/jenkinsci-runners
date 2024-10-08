@@ -51,6 +51,7 @@ jobs:
       - name: Download maven artifacts
         run: |
           while IFS= read -r fullrepo; do 
+             [ -z "${fullrepo}" ] && continue
              repo=$(echo $fullrepo | cut -d '/' -f2)
              git clone --depth 1 https://github.com/${fullrepo}
              cd $repo
