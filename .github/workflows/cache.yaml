@@ -62,6 +62,10 @@ jobs:
         env:
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+      - name: Download node bundle
+        run: |
+          mkdir -p ~/.m2/repository/com/github/eirslett/node/16.0.0
+          curl -fSL https://nodejs.org/dist/v16.0.0/node-v16.0.0-linux-x64.tar.gz -o ~/.m2/repository/com/github/eirslett/node/16.0.0/node-16.0.0-linux-x64.tar.gz
       - name: Cleanup Meeds and eXo artifacts
         run: |
           rm -rf ~/.m2/repository/io/meeds
