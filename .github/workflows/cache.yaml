@@ -5,6 +5,7 @@ on:
     - cron: "0 0 * * *"
 env:
   SETTINGS_XML_URL: 'http://storage.exoplatform.org/public/githubci/maven-settings-jenkinsci.xml'
+  GH_M2_CACHE: generic-m2-repository
   jdk_major_version: 21
   maven_version: 3.9.9
   repos_list: |
@@ -75,7 +76,11 @@ jobs:
           rm -rf ~/.m2/repository/com/exoplatform
       - name: Drop old cache
         run: |
-          gh cache delete generic-m2-repository -R ${GITHUB_REPOSITORY}
+          if gh cache list -R ${GITHUB_REPOSITORY} | grep -q ${GH_M2_CACHE}; then
+            gh cache delete ${GH_M2_CACHE} -R ${GITHUB_REPOSITORY}
+          else
+            echo "Cache ${GH_M2_CACHE} not found!"
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # Save Maven Artifacts Cache to boost up builds
@@ -83,4 +88,4 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ~/.m2/repository
-          key: generic-m2-repository
+          key: ${{ env.GH_M2_CACHE }}
