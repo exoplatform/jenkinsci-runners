@@ -25,6 +25,6 @@ while kill -0 ${MVN_PID} &>/dev/null; do
   echo "OK Maven is running, Wrapper PID=${MVN_PID}"
 done
 echo "Maven build is finished! Stopping ssh agent..."
-sleep 10 # wait for jenkins to close ssh connection
+sleep 30 # wait for jenkins to close ssh connection and retrieves junit report files
 kill -9 ${SSH_PID}
 exit 0
