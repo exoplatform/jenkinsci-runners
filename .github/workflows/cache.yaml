@@ -15,13 +15,18 @@ env:
     Meeds-io/gatein-portal
     Meeds-io/commons
     Meeds-io/social
+    Meeds-io/layout
+    Meeds-io/wallet
+    Meeds-io/gamification
     Meeds-io/meeds
     exoplatform/maven-exo-parent-pom
     exoplatform/maven-exo-depmgt-pom
     exoplatform/commons-exo
     exoplatform/jcr
     exoplatform/ecms
+    exoplatform/agenda
     exoplatform/documents
+    exoplatform/processes
     exoplatform/platform-public-distributions
 jobs:
   cache:
