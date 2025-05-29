@@ -1,0 +1,27 @@
+name: Keep Repo Awake
+
+on:
+  schedule:
+    - cron: '0 3 * * 1' # Every Monday at 03:00 UTC
+  workflow_dispatch:    # Allows manual trigger
+
+jobs:
+  keep-awake:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create/update keepmeawake branch
+        run: |
+          git checkout -B keepmeawake
+          echo "Last updated: $(date -u)" > keepalive.txt
+          git add keepalive.txt
+          git commit -m "Keep repo active: $(date -u)" || echo "Nothing to commit"
+          git push origin keepmeawake --force
