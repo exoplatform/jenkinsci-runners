@@ -3,74 +3,99 @@ on:
   workflow_dispatch:
     inputs:
       AGENT_HOST:
-        description: agent host
+        description: "Agent hostname or IP address"
         required: true
         type: string
       AGENT_FORWARD_PORT:
-        description: agent forward port
+        description: "Port for SSH forwarding to agent"
         required: true
         type: string
       JENKINS_JOB_NAME:
-        description: Jenkins Job Name
+        description: "Name of the Jenkins job to execute"
         required: true
         type: string
       JENKINS_JOB_BUILD_NUMBER:
-        description: Jenkins Job Build Number
+        description: "Build number of the Jenkins job"
         required: true
         type: number
       MAVEN_WAIT_TIMEOUT:
-        description: Maven startup wait timeout
+        description: "Timeout in seconds to wait for Maven startup"
         required: false
-        default: 60
+        default: 300
         type: number
       maven_version:
-        description: Maven version
+        description: "Maven version to use"
         default: "3.9.9"
         required: false
         type: string
       jdk_major_version:
-        description: JDK Major version (eg 8, 11, 14, 17, 21,...)
+        description: "JDK major version (8, 11, 17, 21, etc.)"
         default: 21
         required: false
         type: number
       maximize_build_space:
-        description: Maximize Build Space for Bigger Projects Unit tests based on files and blocks
+        description: "Maximize build space for large projects"
         type: boolean
         required: false
         default: false
+
 jobs:
   provision:
     name: "Build ${{ inputs.JENKINS_JOB_NAME }} #${{ inputs.JENKINS_JOB_BUILD_NUMBER }}"
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     concurrency:
-      group: ${{ inputs.JENKINS_JOB_NAME }}
+      group: "${{ inputs.JENKINS_JOB_NAME }}-${{ inputs.JENKINS_JOB_BUILD_NUMBER }}"
       cancel-in-progress: true
 
+    env:
+      MAVEN_OPTS: "-Dmaven.repo.local=${{ github.workspace }}/.m2/repository"
+      JAVA_HOME: "${{ env[format('JAVA_HOME_{0}_X64', inputs.jdk_major_version)] }}"
+
     steps:
-      # Hack: Maximize Disk space for big & legacy projects (May become unsupported in future Azure runner releases)
+      - name: Validate inputs
+        run: |
+          if ! [[ "${{ inputs.jdk_major_version }}" =~ ^(8|11|17|21)$ ]]; then
+            echo "::error::Unsupported JDK version: ${{ inputs.jdk_major_version }}"
+            exit 1
+          fi
+          if ! [[ "${{ inputs.maven_version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid Maven version format"
+            exit 1
+          fi
+
       - name: Maximize build space
+        if: ${{ inputs.maximize_build_space }}
         uses: easimon/maximize-build-space@v10
-        if: ${{ inputs.maximize_build_space == true }}
         with:
           root-reserve-mb: 2048
           temp-reserve-mb: 2048
           swap-size-mb: 1024
-          remove-dotnet: 'true'
-          remove-android: 'true'
+          remove-dotnet: true
+          remove-android: true
+          remove-haskell: true
+
       - name: Checkout repository
         uses: actions/checkout@v4
-      # Setup Maven
+        with:
+          fetch-depth: 0
+
       - name: Set up Maven ${{ inputs.maven_version }}
         uses: stCarolas/setup-maven@v5
         with:
           maven-version: ${{ inputs.maven_version }}
-      # Restore Cache Maven Artifcats to boost up builds
-      - name: Restore Maven artifacts Cache
-        uses: actions/cache/restore@v4
+          cache-enabled: false  # We'll handle caching separately
+
+      - name: Cache Maven artifacts
+        uses: actions/cache@v4
         with:
-          path: ~/.m2/repository
-          key: generic-m2-repository
+          path: |
+            ~/.m2/repository
+            ${{ github.workspace }}/.m2/repository
+          key: maven-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            maven-${{ runner.os }}-
+
       - name: Install SSH key
         uses: shimataro/ssh-key-action@v2
         with:
@@ -78,51 +103,74 @@ jobs:
           known_hosts: ${{ secrets.KNOWN_HOSTS }}
           config: |
             Host ${{ inputs.AGENT_HOST }}
-            HostName ${{ inputs.AGENT_HOST }}
-            User ${{ secrets.USERNAME }}
-            Port ${{ secrets.PORT }}
-            StrictHostKeyChecking no
-      - name: Setup JDK Environment Variables
+              HostName ${{ inputs.AGENT_HOST }}
+              User ${{ secrets.USERNAME }}
+              Port ${{ secrets.PORT }}
+              StrictHostKeyChecking no
+              ConnectTimeout 30
+              ServerAliveInterval 60
+              ServerAliveCountMax 3
+
+      - name: Setup JDK ${{ inputs.jdk_major_version }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ inputs.jdk_major_version }}
+          cache: 'maven'
+
+      - name: Configure system for Maven builds
         run: |
-          sudo update-alternatives --remove-all java
-          sudo update-alternatives --remove-all javac
-          echo "export JAVA_HOME=${JAVA_HOME_${{ inputs.jdk_major_version }}_X64}" | sudo tee -a /etc/profile
-          sudo update-alternatives --install /usr/bin/java java ${JAVA_HOME_${{ inputs.jdk_major_version }}_X64}/bin/java 9999
-          sudo update-alternatives --install /usr/bin/javac javac ${JAVA_HOME_${{ inputs.jdk_major_version }}_X64}/bin/javac 9999
-      - name: Setup Maven for SSH Connection
-        run: |
-          ghaRunnerURL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          cat > runnerinfo << EOF 
-          echo "${ghaRunnerURL}"
+          # Create runner info script
+          sudo tee /usr/bin/runnerinfo >/dev/null <<EOF
+          #!/bin/bash
+          echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           EOF
-          sudo mv runnerinfo /usr/bin/
           sudo chmod +x /usr/bin/runnerinfo
-          cat > mvn << EOF 
-          . /etc/profile
-          echo $\$ > /tmp/.mvnpid
-          /opt/hostedtoolcache/maven/${{ inputs.maven_version }}/x64/bin/mvn -V \$@
+
+          # Create Maven wrapper script
+          sudo tee /usr/bin/mvn >/dev/null <<EOF
+          #!/bin/bash
+          echo \$\$ > /tmp/.mvnpid
+          /opt/hostedtoolcache/maven/${{ inputs.maven_version }}/x64/bin/mvn -V "\$@"
           EOF
-          sudo mv mvn /usr/bin/
           sudo chmod +x /usr/bin/mvn
+
+          # Configure systemd to kill user processes
           echo "KillUserProcesses=yes" | sudo tee -a /etc/systemd/logind.conf
           sudo systemctl restart systemd-logind.service
-      - name: Init gnupg for signing artifacts
+
+      - name: Initialize GPG for artifact signing
         run: |
           chmod +x initgpg.sh
           ./initgpg.sh
-        env: 
+        env:
           AGENT_HOST: ${{ inputs.AGENT_HOST }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-      - name: Connect to agent
+          GNUPGHOME: "${{ github.workspace }}/.gnupg"
+
+      - name: Connect to Jenkins agent
         run: |
           chmod +x daemon.sh
-          echo "Staring agent daemon..."
           ./daemon.sh
-        env: 
+        env:
           MAVEN_WAIT_TIMEOUT: ${{ inputs.MAVEN_WAIT_TIMEOUT }}
           AGENT_HOST: ${{ inputs.AGENT_HOST }}
           AGENT_FORWARD_PORT: ${{ inputs.AGENT_FORWARD_PORT }}
-      - name: Stop runner
+          MVN_PID_FILE: "/tmp/.mvnpid"
+
+      - name: Post-build cleanup
         if: always()
-        run: | 
-          echo "Job has been stopped"
+        run: |
+          echo "## Build Summary ##"
+          echo "Job: ${{ inputs.JENKINS_JOB_NAME }}"
+          echo "Build Number: ${{ inputs.JENKINS_JOB_BUILD_NUMBER }}"
+          echo "Status: ${{ job.status }}"
+          echo "Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          
+          # Clean up sensitive files
+          if [ -d "${{ github.workspace }}/.gnupg" ]; then
+            rm -rf "${{ github.workspace }}/.gnupg"
+          fi
+          if [ -f "/tmp/.mvnpid" ]; then
+            rm -f "/tmp/.mvnpid"
+          fi
