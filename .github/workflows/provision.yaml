@@ -50,7 +50,6 @@ jobs:
 
     env:
       MAVEN_OPTS: "-Dmaven.repo.local=${{ github.workspace }}/.m2/repository"
-      JAVA_HOME: "${{ env[format('JAVA_HOME_{0}_X64', inputs.jdk_major_version)] }}"
 
     steps:
       - name: Validate inputs
@@ -63,6 +62,15 @@ jobs:
             echo "::error::Invalid Maven version format"
             exit 1
           fi
+
+      - name: Set JAVA_HOME dynamically
+        run: |
+          sudo update-alternatives --remove-all java
+          sudo update-alternatives --remove-all javac
+          echo "export JAVA_HOME=${JAVA_HOME_${{ inputs.jdk_major_version }}_X64}" | sudo tee -a /etc/profile
+          sudo update-alternatives --install /usr/bin/java java ${JAVA_HOME_${{ inputs.jdk_major_version }}_X64}/bin/java 9999
+          sudo update-alternatives --install /usr/bin/javac javac ${JAVA_HOME_${{ inputs.jdk_major_version }}_X64}/bin/javac 9999
+        shell: bash
 
       - name: Maximize build space
         if: ${{ inputs.maximize_build_space }}
