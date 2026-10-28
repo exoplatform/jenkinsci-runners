@@ -10,6 +10,12 @@ readonly SSH_MAX_DRAIN=${SSH_MAX_DRAIN:-600}                  # upper bound for 
 readonly SSH_TUNNEL_RETRIES=${SSH_TUNNEL_RETRIES:-8}
 readonly SSH_TUNNEL_SETTLE=${SSH_TUNNEL_SETTLE:-3}
 readonly SSHD_PORT=22
+readonly MVN_JOB_DIR=${MVN_JOB_DIR:-/tmp/.mvnjob}                # state of the detached mvn build
+readonly MVN_WRAPPER_DIR=${MVN_WRAPPER_DIR:-/usr/bin}
+readonly ABANDON_TIMEOUT=${ABANDON_TIMEOUT:-300}                 # no SSH session for this long while mvn runs: Jenkins is gone
+# Host key policy for the Jenkins agent host: yes (known_hosts entry required), auto (verify
+# when the host is in known_hosts, warn and accept otherwise), no
+readonly STRICT_HOST_KEY_CHECKING=${STRICT_HOST_KEY_CHECKING:-auto}
 readonly SSH_KEY_DIR=~/.ssh
 readonly AUTHORIZED_KEYS=~/.ssh/authorized_keys
 
@@ -25,6 +31,25 @@ log_info() {
 
 log_error() {
   echo "[ERROR] $(date '+%Y-%m-%d %H:%M:%S') - $*" >&2
+}
+
+# Timeline written to the GitHub job summary
+EVENTS=()
+record_event() {
+  EVENTS+=("$(date '+%H:%M:%S')|$*")
+}
+
+write_summary() {
+  [[ -n "${GITHUB_STEP_SUMMARY:-}" && ${#EVENTS[@]} -gt 0 ]] || return 0
+  {
+    echo "### Jenkins agent ${AGENT_HOST}:${AGENT_FORWARD_PORT}"
+    echo "| Time (UTC) | Event |"
+    echo "| --- | --- |"
+    local e
+    for e in "${EVENTS[@]}"; do
+      echo "| ${e%%|*} | ${e#*|} |"
+    done
+  } >>"$GITHUB_STEP_SUMMARY" || true
 }
 
 # Cleanup function
@@ -51,8 +76,83 @@ cleanup() {
     rm -f "$MVN_PID_FILE"
   fi
 
+  write_summary
   log_info "Cleanup complete"
   exit $exit_code
+}
+
+# SSH options for the Jenkins agent host. The tunnel carries the build and the signing
+# setup, so the host must be the expected one: use the known_hosts the ssh-key action wrote.
+HOSTKEY_OPTS=()
+configure_host_key_checking() {
+  local known_hosts=~/.ssh/known_hosts port name
+  port=$(ssh -G "$AGENT_HOST" 2>/dev/null | awk '$1 == "port" {print $2; exit}')
+  name="$AGENT_HOST"
+  [[ -n "$port" && "$port" != 22 ]] && name="[${AGENT_HOST}]:${port}"
+
+  if [[ "$STRICT_HOST_KEY_CHECKING" != no ]] && ssh-keygen -F "$name" -f "$known_hosts" >/dev/null 2>&1; then
+    log_info "Verifying the host key of ${name} against known_hosts"
+    HOSTKEY_OPTS=(-o "UserKnownHostsFile=${known_hosts}" -o StrictHostKeyChecking=yes)
+  elif [[ "$STRICT_HOST_KEY_CHECKING" == yes ]]; then
+    log_error "${name} is not in known_hosts (KNOWN_HOSTS secret) and STRICT_HOST_KEY_CHECKING=yes"
+    return 1
+  else
+    log_error "WARNING: host key of ${name} is not verified (add it to the KNOWN_HOSTS secret, then set STRICT_HOST_KEY_CHECKING=yes)"
+    HOSTKEY_OPTS=(-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no)
+  fi
+}
+
+# Install the mvn wrapper Jenkins runs over SSH. The build runs detached (own session, log
+# and exit code kept in MVN_JOB_DIR) so a lost SSH session or tunnel does not kill it:
+# calling the wrapper again with the same arguments re-attaches to the running build.
+# Exit code 255 is reserved for ssh itself, so Jenkins can tell "connection lost" from a build failure.
+install_mvn_wrapper() {
+  local real_mvn target="${MVN_WRAPPER_DIR}/mvn" tmp
+  real_mvn=$(command -v mvn) || { log_error "mvn not found in PATH"; return 1; }
+  tmp=$(mktemp)
+  sed "s|__REAL_MVN__|${real_mvn}|; s|__JOB_DIR__|${MVN_JOB_DIR}|; s|__PID_FILE__|${MVN_PID_FILE}|" >"$tmp" <<'WRAPPER'
+#!/usr/bin/env bash
+[[ -r /etc/profile ]] && . /etc/profile
+REAL_MVN='__REAL_MVN__'
+JOB_DIR='__JOB_DIR__'
+PID_FILE='__PID_FILE__'
+
+fingerprint=$(printf '%s\0' "$PWD" "$@" | sha256sum | cut -d' ' -f1)
+job_pid() { cat "$JOB_DIR/pid" 2>/dev/null; }
+job_running() { local p; p=$(job_pid); [[ -n "$p" ]] && kill -0 "$p" 2>/dev/null; }
+# A finished build is only re-attached to shortly after it ended (lost connection at the very end)
+recently_finished() { [[ -f "$JOB_DIR/rc" ]] && [[ -z "$(find "$JOB_DIR/rc" -mmin +2 2>/dev/null)" ]]; }
+
+if [[ "$(cat "$JOB_DIR/fingerprint" 2>/dev/null)" == "$fingerprint" ]] && { job_running || recently_finished; }; then
+  tail_from=200
+  echo "[mvn-wrapper] re-attaching to the running build (last $tail_from lines may repeat)" >&2
+else
+  rm -rf "$JOB_DIR"
+  mkdir -m 700 "$JOB_DIR"
+  echo "$fingerprint" >"$JOB_DIR/fingerprint"
+  : >"$JOB_DIR/log"
+  setsid bash -c '
+    echo $$ >"$0/pid.tmp" && mv "$0/pid.tmp" "$0/pid" && cp "$0/pid" "$1"
+    shift; real_mvn=$1; shift
+    "$real_mvn" -V "$@"
+    rc=$?
+    echo "$rc" >"$0/rc.tmp" && mv "$0/rc.tmp" "$0/rc"
+  ' "$JOB_DIR" "$PID_FILE" "$REAL_MVN" "$@" >"$JOB_DIR/log" 2>&1 </dev/null &
+  for _ in $(seq 1 50); do [[ -f "$JOB_DIR/pid" ]] && break; sleep 0.2; done
+  tail_from=+1
+fi
+
+pid=$(job_pid)
+[[ -n "$pid" ]] || { echo "[mvn-wrapper] build did not start" >&2; exit 254; }
+tail -n "$tail_from" -f --pid="$pid" "$JOB_DIR/log"
+for _ in $(seq 1 20); do [[ -f "$JOB_DIR/rc" ]] && break; sleep 0.5; done
+rc=$(cat "$JOB_DIR/rc" 2>/dev/null || echo 137)
+(( rc == 255 )) && rc=254
+exit "$rc"
+WRAPPER
+  chmod 755 "$tmp"
+  if [[ -w "$MVN_WRAPPER_DIR" ]]; then mv "$tmp" "$target"; else sudo mv "$tmp" "$target"; fi
+  log_info "Installed mvn wrapper ${target} (real mvn: ${real_mvn})"
 }
 
 # Setup SSH keys
@@ -94,8 +194,7 @@ start_ssh_tunnel() {
   for ((attempt = 1; attempt <= SSH_TUNNEL_RETRIES; attempt++)); do
     log_info "Starting SSH tunnel to ${AGENT_HOST} forwarding port ${AGENT_FORWARD_PORT} (attempt ${attempt}/${SSH_TUNNEL_RETRIES})"
 
-    ssh -o UserKnownHostsFile=/dev/null \
-      -o StrictHostKeyChecking=no \
+    ssh "${HOSTKEY_OPTS[@]}" \
       -o LogLevel=ERROR \
       -o ConnectTimeout=20 \
       -o ExitOnForwardFailure=yes \
@@ -109,6 +208,7 @@ start_ssh_tunnel() {
     sleep "$SSH_TUNNEL_SETTLE"
     if tunnel_alive; then
       log_info "SSH tunnel established (PID: $SSH_PID)"
+      record_event "SSH tunnel up (attempt ${attempt})"
       return 0
     fi
     wait "$SSH_PID" 2>/dev/null || true
@@ -164,20 +264,36 @@ wait_for_maven() {
   return 1
 }
 
-# Monitor Maven process
+# Monitor Maven process. If Jenkins disappears (aborted build, lost for good) the detached
+# build would run for hours: stop it when no SSH session was open for ABANDON_TIMEOUT.
 monitor_maven() {
-  local mvn_pid
+  local mvn_pid idle=0
   mvn_pid=$(cat "$MVN_PID_FILE")
 
   log_info "Monitoring Maven process (PID: $mvn_pid)"
+  record_event "Maven started"
 
   while kill -0 "$mvn_pid" 2>/dev/null; do
     sleep 10
     ensure_tunnel || return 1
+    if (($(ssh_sessions) > 0)); then
+      idle=0
+    else
+      ((idle += 10))
+      if ((idle >= ABANDON_TIMEOUT)); then
+        log_error "No SSH session for ${idle}s, Jenkins is gone: stopping the build"
+        record_event "Build stopped: Jenkins gone for ${idle}s"
+        pkill -TERM -s "$mvn_pid" 2>/dev/null || true
+        sleep 5
+        pkill -KILL -s "$mvn_pid" 2>/dev/null || true
+        return 1
+      fi
+    fi
     log_info "Maven process still running (PID: $mvn_pid)"
   done
 
   log_info "Maven build completed"
+  record_event "Maven build completed"
 }
 
 # Keep the runner (and the tunnel) up until Jenkins has finished with it: it still
@@ -196,6 +312,7 @@ drain_ssh_sessions() {
     fi
   done
   log_info "Jenkins is done (idle: ${idle}s, waited: ${elapsed}s)"
+  record_event "Jenkins finished (waited ${elapsed}s)"
 }
 
 # Main execution
@@ -205,6 +322,8 @@ main() {
   trap 'exit 130' INT
 
   setup_ssh || exit 1
+  configure_host_key_checking || exit 1
+  install_mvn_wrapper || exit 1
   start_ssh_tunnel
   wait_for_maven || exit 1
   monitor_maven

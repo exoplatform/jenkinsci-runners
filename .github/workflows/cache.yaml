@@ -99,6 +99,10 @@ jobs:
           rm -rf ~/.m2/repository/io/meeds
           rm -rf ~/.m2/repository/org/exoplatform
           rm -rf ~/.m2/repository/com/exoplatform
+      - name: Report cache size
+        run: |
+          # The cache is one entry per repository and capped by GitHub (10 GB): watch the growth
+          du -sh ~/.m2/repository | tee -a "${GITHUB_STEP_SUMMARY}"
       # Save under a unique key first, then drop the older entries: there is never
       # a moment without a usable cache (provision restores by key prefix).
       - name: Save Maven artifacts Cache

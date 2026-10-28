@@ -5,11 +5,10 @@ set -euo pipefail
 : "${AGENT_HOST:?Error: AGENT_HOST must be set}"
 : "${GPG_PASSPHRASE:?Error: GPG_PASSPHRASE must be set}"
 readonly GPG_KEY_FILE="$HOME/.gpg.key"
-readonly SSH_OPTS=(
-    -o "UserKnownHostsFile=/dev/null"
-    -o "StrictHostKeyChecking=no"
-    -o "LogLevel=ERROR"
-)
+# Host key policy for the Jenkins agent host (same as daemon.sh): yes (known_hosts entry
+# required), auto (verify when the host is in known_hosts, warn otherwise), no
+readonly STRICT_HOST_KEY_CHECKING=${STRICT_HOST_KEY_CHECKING:-auto}
+SSH_OPTS=(-o "LogLevel=ERROR")
 readonly GPG_OPTS=(
     --batch
     --pinentry-mode=loopback
@@ -36,8 +35,27 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
+configure_host_key_checking() {
+    local known_hosts=~/.ssh/known_hosts port name
+    port=$(ssh -G "$AGENT_HOST" 2>/dev/null | awk '$1 == "port" {print $2; exit}')
+    name="$AGENT_HOST"
+    [[ -n "$port" && "$port" != 22 ]] && name="[${AGENT_HOST}]:${port}"
+
+    if [[ "$STRICT_HOST_KEY_CHECKING" != no ]] && ssh-keygen -F "$name" -f "$known_hosts" >/dev/null 2>&1; then
+        SSH_OPTS+=(-o "UserKnownHostsFile=${known_hosts}" -o "StrictHostKeyChecking=yes")
+    elif [[ "$STRICT_HOST_KEY_CHECKING" == yes ]]; then
+        log "${name} is not in known_hosts (KNOWN_HOSTS secret) and STRICT_HOST_KEY_CHECKING=yes" >&2
+        exit 1
+    else
+        log "WARNING: host key of ${name} is not verified (add it to the KNOWN_HOSTS secret)" >&2
+        SSH_OPTS+=(-o "UserKnownHostsFile=/dev/null" -o "StrictHostKeyChecking=no")
+    fi
+}
+
 # Main execution
 main() {
+    configure_host_key_checking
+
     log "Starting GPG key transfer and import"
 
     # Transfer the key securely
