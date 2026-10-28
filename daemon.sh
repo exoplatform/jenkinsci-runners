@@ -7,7 +7,7 @@ readonly DEFAULT_MAVEN_WAIT_TIMEOUT=300
 # Timings are overridable for testing
 readonly SSH_SLEEP_BEFORE_EXIT=${SSH_SLEEP_BEFORE_EXIT:-30}   # idle time (no SSH session) required after the build
 readonly SSH_MAX_DRAIN=${SSH_MAX_DRAIN:-600}                  # upper bound for Jenkins to collect results
-readonly SSH_TUNNEL_RETRIES=${SSH_TUNNEL_RETRIES:-5}
+readonly SSH_TUNNEL_RETRIES=${SSH_TUNNEL_RETRIES:-8}
 readonly SSH_TUNNEL_SETTLE=${SSH_TUNNEL_SETTLE:-3}
 readonly SSHD_PORT=22
 readonly SSH_KEY_DIR=~/.ssh
@@ -99,7 +99,8 @@ start_ssh_tunnel() {
       -o LogLevel=ERROR \
       -o ConnectTimeout=20 \
       -o ExitOnForwardFailure=yes \
-      -o ServerAliveInterval=60 \
+      -o TCPKeepAlive=yes \
+      -o ServerAliveInterval=15 \
       -o ServerAliveCountMax=3 \
       -g -N "$AGENT_HOST" \
       -R "${AGENT_FORWARD_PORT}:localhost:${SSHD_PORT}" &
@@ -111,8 +112,12 @@ start_ssh_tunnel() {
       return 0
     fi
     wait "$SSH_PID" 2>/dev/null || true
-    log_error "SSH tunnel exited early, retrying in $((attempt * 2))s"
-    sleep $((attempt * 2))
+    # Backoff capped at 10s: after a network drop the Jenkins host may still hold the
+    # remote port of the dead session until its own keepalive expires
+    local delay=$((attempt * 2))
+    ((delay > 10)) && delay=10
+    log_error "SSH tunnel exited early, retrying in ${delay}s"
+    sleep "$delay"
   done
 
   log_error "Unable to establish the SSH tunnel after ${SSH_TUNNEL_RETRIES} attempts"
