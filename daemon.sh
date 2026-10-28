@@ -119,13 +119,11 @@ PID_FILE='__PID_FILE__'
 
 fingerprint=$(printf '%s\0' "$PWD" "$@" | sha256sum | cut -d' ' -f1)
 job_pid() { cat "$JOB_DIR/pid" 2>/dev/null; }
-job_running() { local p; p=$(job_pid); [[ -n "$p" ]] && kill -0 "$p" 2>/dev/null; }
-# A finished build is only re-attached to shortly after it ended (lost connection at the very end)
-recently_finished() { [[ -f "$JOB_DIR/rc" ]] && [[ -z "$(find "$JOB_DIR/rc" -mmin +2 2>/dev/null)" ]]; }
-
-if [[ "$(cat "$JOB_DIR/fingerprint" 2>/dev/null)" == "$fingerprint" ]] && { job_running || recently_finished; }; then
+# Same directory and arguments as the build already started on this runner: never start a
+# second build (Jenkins runs mvn once per runner), re-attach, or report the stored result.
+if [[ "$(cat "$JOB_DIR/fingerprint" 2>/dev/null)" == "$fingerprint" ]]; then
   tail_from=200
-  echo "[mvn-wrapper] re-attaching to the running build (last $tail_from lines may repeat)" >&2
+  echo "[mvn-wrapper] re-attaching to the build (last $tail_from lines may repeat)" >&2
 else
   rm -rf "$JOB_DIR"
   mkdir -m 700 "$JOB_DIR"
@@ -146,6 +144,7 @@ pid=$(job_pid)
 [[ -n "$pid" ]] || { echo "[mvn-wrapper] build did not start" >&2; exit 254; }
 tail -n "$tail_from" -f --pid="$pid" "$JOB_DIR/log"
 for _ in $(seq 1 20); do [[ -f "$JOB_DIR/rc" ]] && break; sleep 0.5; done
+# 137: the build died without leaving an exit code
 rc=$(cat "$JOB_DIR/rc" 2>/dev/null || echo 137)
 (( rc == 255 )) && rc=254
 exit "$rc"
