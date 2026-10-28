@@ -10,7 +10,7 @@ env:
   SETTINGS_XML_URL: 'http://storage.exoplatform.org/public/githubci/maven-settings-jenkinsci.xml'
   GH_M2_CACHE: generic-m2-repository
   jdk_major_version: 21
-  maven_version: 3.9.11
+  maven_version: 3.9.16
   repos_list: |
     Meeds-io/maven-parent-pom
     Meeds-io/maven-depmgt-pom
