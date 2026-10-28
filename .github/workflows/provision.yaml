@@ -19,9 +19,9 @@ on:
         required: true
         type: number
       MAVEN_WAIT_TIMEOUT:
-        description: Maven startup wait timeout
+        description: Maven startup wait timeout (seconds, counted from the SSH tunnel being up; must cover Jenkins checkout and source copy)
         required: false
-        default: 60
+        default: 300
         type: number
       maven_version:
         description: Maven version
@@ -38,6 +38,8 @@ on:
         type: boolean
         required: false
         default: false
+permissions:
+  contents: read
 jobs:
   provision:
     name: "Build ${{ inputs.JENKINS_JOB_NAME }} #${{ inputs.JENKINS_JOB_BUILD_NUMBER }}"
@@ -48,9 +50,23 @@ jobs:
       cancel-in-progress: true
 
     steps:
+      # These inputs end up in an ssh config and in scripts: only accept sane values
+      - name: Validate inputs
+        run: |
+          [[ "${AGENT_HOST}" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::Invalid AGENT_HOST"; exit 1; }
+          [[ "${AGENT_FORWARD_PORT}" =~ ^[0-9]{1,5}$ ]] && (( AGENT_FORWARD_PORT >= 1024 && AGENT_FORWARD_PORT <= 65535 )) || { echo "::error::Invalid AGENT_FORWARD_PORT"; exit 1; }
+          [[ "${JENKINS_JOB_NAME}" != *$'\n'* ]] || { echo "::error::Invalid JENKINS_JOB_NAME"; exit 1; }
+          [[ "${MAVEN_VERSION}" =~ ^[0-9]+(\.[0-9]+)*$ ]] || { echo "::error::Invalid maven_version"; exit 1; }
+          [[ "${JDK_MAJOR_VERSION}" =~ ^[0-9]+$ ]] || { echo "::error::Invalid jdk_major_version"; exit 1; }
+        env:
+          AGENT_HOST: ${{ inputs.AGENT_HOST }}
+          AGENT_FORWARD_PORT: ${{ inputs.AGENT_FORWARD_PORT }}
+          JENKINS_JOB_NAME: ${{ inputs.JENKINS_JOB_NAME }}
+          MAVEN_VERSION: ${{ inputs.maven_version }}
+          JDK_MAJOR_VERSION: ${{ inputs.jdk_major_version }}
       # Hack: Maximize Disk space for big & legacy projects (May become unsupported in future Azure runner releases)
       - name: Maximize build space
-        uses: easimon/maximize-build-space@v10
+        uses: easimon/maximize-build-space@fc881a613ad2a34aca9c9624518214ebc21dfc0c # v10
         if: ${{ inputs.maximize_build_space == true }}
         with:
           root-reserve-mb: 2048
@@ -59,20 +75,23 @@ jobs:
           remove-dotnet: 'true'
           remove-android: 'true'
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # Setup Maven
       - name: Set up Maven ${{ inputs.maven_version }}
-        uses: stCarolas/setup-maven@v5
+        uses: stCarolas/setup-maven@12eb41b233df95d49b0c11fc1b5bc8312e5d4ce0 # v5.1
         with:
           maven-version: ${{ inputs.maven_version }}
       # Restore Cache Maven Artifcats to boost up builds
       - name: Restore Maven artifacts Cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2/repository
           key: generic-m2-repository
+          restore-keys: generic-m2-repository-
       - name: Install SSH key
-        uses: shimataro/ssh-key-action@v2
+        uses: shimataro/ssh-key-action@87a8f067114a8ce263df83e9ed5c849953548bc3 # v2.8.1
         with:
           key: ${{ secrets.PRIVATE_KEY }}
           known_hosts: ${{ secrets.KNOWN_HOSTS }}
@@ -84,45 +103,52 @@ jobs:
             StrictHostKeyChecking no
       - name: Setup JDK Environment Variables
         run: |
+          jdk_var="JAVA_HOME_${JDK_MAJOR_VERSION}_X64"
+          jdk_home="${!jdk_var:-}"
+          if [ -z "${jdk_home}" ] || [ ! -x "${jdk_home}/bin/java" ]; then
+            echo "::error::JDK ${JDK_MAJOR_VERSION} is not available on this runner (${jdk_var} is unset or invalid)"
+            exit 1
+          fi
           sudo update-alternatives --remove-all java
           sudo update-alternatives --remove-all javac
-          echo "export JAVA_HOME=${JAVA_HOME_${{ inputs.jdk_major_version }}_X64}" | sudo tee -a /etc/profile
-          sudo update-alternatives --install /usr/bin/java java ${JAVA_HOME_${{ inputs.jdk_major_version }}_X64}/bin/java 9999
-          sudo update-alternatives --install /usr/bin/javac javac ${JAVA_HOME_${{ inputs.jdk_major_version }}_X64}/bin/javac 9999
+          echo "export JAVA_HOME=${jdk_home}" | sudo tee -a /etc/profile
+          sudo update-alternatives --install /usr/bin/java java "${jdk_home}/bin/java" 9999
+          sudo update-alternatives --install /usr/bin/javac javac "${jdk_home}/bin/javac" 9999
+        env:
+          JDK_MAJOR_VERSION: ${{ inputs.jdk_major_version }}
       - name: Setup Maven for SSH Connection
         run: |
+          # Resolve the real mvn installed by setup-maven before shadowing it
+          realMvn="$(command -v mvn)"
           ghaRunnerURL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          cat > runnerinfo << EOF 
+          cat > runnerinfo << EOF
           echo "${ghaRunnerURL}"
           EOF
           sudo mv runnerinfo /usr/bin/
           sudo chmod +x /usr/bin/runnerinfo
-          cat > mvn << EOF 
+          cat > mvn << EOF
           . /etc/profile
           echo $\$ > /tmp/.mvnpid
-          /opt/hostedtoolcache/maven/${{ inputs.maven_version }}/x64/bin/mvn -V \$@
+          ${realMvn} -V \$@
           EOF
           sudo mv mvn /usr/bin/
           sudo chmod +x /usr/bin/mvn
-          echo "KillUserProcesses=yes" | sudo tee -a /etc/systemd/logind.conf
+          grep -q '^KillUserProcesses=yes' /etc/systemd/logind.conf || echo "KillUserProcesses=yes" | sudo tee -a /etc/systemd/logind.conf
           sudo systemctl restart systemd-logind.service
       - name: Init gnupg for signing artifacts
         run: |
-          chmod +x initgpg.sh
-          ./initgpg.sh
-        env: 
+          bash initgpg.sh
+        env:
           AGENT_HOST: ${{ inputs.AGENT_HOST }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
       - name: Connect to agent
         run: |
-          chmod +x daemon.sh
-          echo "Staring agent daemon..."
-          ./daemon.sh
+          echo "Starting agent daemon..."
+          bash daemon.sh
         env: 
           MAVEN_WAIT_TIMEOUT: ${{ inputs.MAVEN_WAIT_TIMEOUT }}
           AGENT_HOST: ${{ inputs.AGENT_HOST }}
           AGENT_FORWARD_PORT: ${{ inputs.AGENT_FORWARD_PORT }}
       - name: Stop runner
         if: always()
-        run: | 
-          echo "Job has been stopped"
+        run: echo "Job has been stopped"

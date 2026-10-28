@@ -1,18 +1,21 @@
 name: "Generate maven cache"
 on:
-  workflow_dispatch: 
+  workflow_dispatch:
   schedule:
     - cron: "0 0 * * *"
+permissions:
+  contents: read
+  actions: write # needed to delete the previous cache entry
 env:
   SETTINGS_XML_URL: 'http://storage.exoplatform.org/public/githubci/maven-settings-jenkinsci.xml'
   GH_M2_CACHE: generic-m2-repository
   jdk_major_version: 21
   maven_version: 3.9.11
   repos_list: |
-    Meeds-io/maven-parent-pom 
+    Meeds-io/maven-parent-pom
     Meeds-io/maven-depmgt-pom
     Meeds-io/kernel
-    Meeds-io/gatein-portal
+    Meeds-io/portal
     Meeds-io/commons
     Meeds-io/social
     Meeds-io/layout
@@ -40,30 +43,47 @@ jobs:
     steps:
       - name: Setup JDK Environment Variables
         run: |
+          jdk_var="JAVA_HOME_${jdk_major_version}_X64"
+          jdk_home="${!jdk_var:-}"
+          if [ -z "${jdk_home}" ] || [ ! -x "${jdk_home}/bin/java" ]; then
+            echo "::error::JDK ${jdk_major_version} is not available on this runner"
+            exit 1
+          fi
           sudo update-alternatives --remove-all java
           sudo update-alternatives --remove-all javac
-          echo "export JAVA_HOME=${JAVA_HOME_${{ env.jdk_major_version }}_X64}" | sudo tee -a /etc/profile
-          sudo update-alternatives --install /usr/bin/java java ${JAVA_HOME_${{ env.jdk_major_version }}_X64}/bin/java 9999
-          sudo update-alternatives --install /usr/bin/javac javac ${JAVA_HOME_${{ env.jdk_major_version }}_X64}/bin/javac 9999
+          echo "export JAVA_HOME=${jdk_home}" | sudo tee -a /etc/profile
+          sudo update-alternatives --install /usr/bin/java java "${jdk_home}/bin/java" 9999
+          sudo update-alternatives --install /usr/bin/javac javac "${jdk_home}/bin/javac" 9999
       # Setup Maven
       - name: Set up Maven ${{ env.maven_version }}
-        uses: stCarolas/setup-maven@v5
+        uses: stCarolas/setup-maven@12eb41b233df95d49b0c11fc1b5bc8312e5d4ce0 # v5.1
         with:
           maven-version: ${{ env.maven_version }}
-      - name: Prepare environment 
+      - name: Prepare environment
         run: |
           mkdir -p ~/.m2
-          wget -q "${SETTINGS_XML_URL}" -O ~/.m2/settings.xml
+          curl -fsSL --retry 3 "${SETTINGS_XML_URL}" -o ~/.m2/settings.xml
       - name: Download maven artifacts
         run: |
-          while IFS= read -r fullrepo; do 
+          # A repo that cannot be resolved (renamed, private, broken pom) must not
+          # discard the whole cache: record it and report at the end of the job.
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "${workdir}"' EXIT
+          : > "${RUNNER_TEMP}/failed-repos"
+          while IFS= read -r fullrepo; do
+             fullrepo="$(echo "${fullrepo}" | xargs)"
              [ -z "${fullrepo}" ] && continue
-             repo=$(echo $fullrepo | cut -d '/' -f2)
-             git clone --depth 1 https://github.com/${fullrepo}
-             cd $repo
-             mvn -B dependency:go-offline
-             cd ..
-             rm -rf $repo
+             repo="${workdir}/${fullrepo##*/}"
+             echo "::group::${fullrepo}"
+             if git clone -q --depth 1 "https://github.com/${fullrepo}" "${repo}" \
+                && (cd "${repo}" && mvn -B -ntp dependency:go-offline); then
+               echo "OK ${fullrepo}"
+             else
+               echo "::warning title=Cache::Failed to resolve dependencies of ${fullrepo}"
+               echo "${fullrepo}" >> "${RUNNER_TEMP}/failed-repos"
+             fi
+             rm -rf "${repo}"
+             echo "::endgroup::"
           done <<< "$repos_list"
         env:
           NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
@@ -72,25 +92,35 @@ jobs:
         run: |
           mkdir -p ~/.m2/repository/com/github/eirslett/node/16.0.0
           mkdir -p ~/.m2/repository/com/github/eirslett/npm/7.11.2
-          curl -fSL https://nodejs.org/dist/v16.0.0/node-v16.0.0-linux-x64.tar.gz -o ~/.m2/repository/com/github/eirslett/node/16.0.0/node-16.0.0-linux-x64.tar.gz
-          curl -fSL https://registry.npmjs.org/npm/-/npm-7.11.2.tgz -o ~/.m2/repository/com/github/eirslett/npm/7.11.2/npm-7.11.2.tar.gz
+          curl -fsSL --retry 3 https://nodejs.org/dist/v16.0.0/node-v16.0.0-linux-x64.tar.gz -o ~/.m2/repository/com/github/eirslett/node/16.0.0/node-16.0.0-linux-x64.tar.gz
+          curl -fsSL --retry 3 https://registry.npmjs.org/npm/-/npm-7.11.2.tgz -o ~/.m2/repository/com/github/eirslett/npm/7.11.2/npm-7.11.2.tar.gz
       - name: Cleanup Meeds and eXo artifacts
         run: |
           rm -rf ~/.m2/repository/io/meeds
           rm -rf ~/.m2/repository/org/exoplatform
           rm -rf ~/.m2/repository/com/exoplatform
-      - name: Drop old cache
-        run: |
-          if gh cache list -R ${GITHUB_REPOSITORY} | grep -q ${GH_M2_CACHE}; then
-            gh cache delete ${GH_M2_CACHE} -R ${GITHUB_REPOSITORY}
-          else
-            echo "Cache ${GH_M2_CACHE} not found!"
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # Save Maven Artifacts Cache to boost up builds
+      # Save under a unique key first, then drop the older entries: there is never
+      # a moment without a usable cache (provision restores by key prefix).
       - name: Save Maven artifacts Cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2/repository
-          key: ${{ env.GH_M2_CACHE }}
+          key: ${{ env.GH_M2_CACHE }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Drop old caches
+        run: |
+          current="${GH_M2_CACHE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          gh cache list -R "${GITHUB_REPOSITORY}" --key "${GH_M2_CACHE}" --limit 100 --json key -q '.[].key' \
+            | grep -vx "${current}" \
+            | while read -r key; do
+                echo "Deleting old cache ${key}"
+                gh cache delete "${key}" -R "${GITHUB_REPOSITORY}" || true
+              done || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Fail if some repositories could not be cached
+        run: |
+          if [ -s "${RUNNER_TEMP}/failed-repos" ]; then
+            echo "::error title=Cache::Not cached (cache saved without them):"
+            cat "${RUNNER_TEMP}/failed-repos"
+            exit 1
+          fi

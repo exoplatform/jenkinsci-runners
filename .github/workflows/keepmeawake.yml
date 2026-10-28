@@ -5,13 +5,17 @@ on:
     - cron: '0 3 * * 1' # Every Monday at 03:00 UTC
   workflow_dispatch:    # Allows manual trigger
 
+permissions:
+  contents: write # pushes the keepmeawake branch
+
 jobs:
   keep-awake:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Git
         run: |

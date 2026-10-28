@@ -42,10 +42,18 @@ main() {
 
     # Transfer the key securely
     log "Transferring GPG key from ${AGENT_HOST}"
-    if ! rsync -q -aP -e "ssh ${SSH_OPTS[*]}" "${AGENT_HOST}:.gpg.key" "$GPG_KEY_FILE"; then
-        log "Failed to transfer GPG key" >&2
-        exit 1
-    fi
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        if rsync -q -aP -e "ssh ${SSH_OPTS[*]} -o ConnectTimeout=20" "${AGENT_HOST}:.gpg.key" "$GPG_KEY_FILE"; then
+            break
+        fi
+        if [[ $attempt -eq 5 ]]; then
+            log "Failed to transfer GPG key" >&2
+            exit 1
+        fi
+        log "GPG key transfer failed (attempt ${attempt}/5), retrying"
+        sleep $((attempt * 2))
+    done
 
     # Set strict permissions
     chmod 600 "$GPG_KEY_FILE"
