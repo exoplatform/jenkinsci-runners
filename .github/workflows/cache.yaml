@@ -16,6 +16,8 @@ env:
   GH_M2_CACHE: generic-m2-repository
   jdk_major_version: 21
   maven_version: 3.9.16
+  node_fallback_version: 26.13.0
+  npm_fallback_version: 11.20.0
   # Above this size (KB, uncompressed) warn: GitHub caps a repository at 10 GB and evicts silently
   cache_warn_kb: 8388608
   repos_list: |
@@ -95,6 +97,7 @@ jobs:
           workdir="$(mktemp -d)"
           trap 'rm -rf "${workdir}"' EXIT
           : > "${RUNNER_TEMP}/failed-repos"
+          : > "${RUNNER_TEMP}/frontend-versions"
           while IFS= read -r fullrepo; do
              fullrepo="$(echo "${fullrepo}" | xargs)"
              [ -z "${fullrepo}" ] && continue
@@ -103,6 +106,14 @@ jobs:
              if git clone -q --depth 1 "https://github.com/${fullrepo}" "${repo}" \
                 && (cd "${repo}" && mvn -B -ntp dependency:go-offline); then
                echo "OK ${fullrepo}"
+               # node/npm bundles are fetched by frontend-maven-plugin at build time, not by
+               # go-offline: record the versions this repo resolves (inherited from its parent pom)
+               node_v="$(cd "${repo}" && mvn -B -ntp -q -N help:evaluate -Dexpression=node.version -DforceStdout 2>/dev/null || true)"
+               npm_v="$(cd "${repo}" && mvn -B -ntp -q -N help:evaluate -Dexpression=npm.version -DforceStdout 2>/dev/null || true)"
+               node_v="${node_v#v}"
+               if [[ "${node_v}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "${npm_v}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                 echo "${node_v} ${npm_v}" >> "${RUNNER_TEMP}/frontend-versions"
+               fi
              else
                echo "::warning title=Cache::Failed to resolve dependencies of ${fullrepo}"
                echo "${fullrepo}" >> "${RUNNER_TEMP}/failed-repos"
@@ -115,10 +126,15 @@ jobs:
           NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
       - name: Download node & npm bundles
         run: |
-          mkdir -p ~/.m2/repository/com/github/eirslett/node/16.0.0
-          mkdir -p ~/.m2/repository/com/github/eirslett/npm/7.11.2
-          curl -fsSL --retry 3 https://nodejs.org/dist/v16.0.0/node-v16.0.0-linux-x64.tar.gz -o ~/.m2/repository/com/github/eirslett/node/16.0.0/node-16.0.0-linux-x64.tar.gz
-          curl -fsSL --retry 3 https://registry.npmjs.org/npm/-/npm-7.11.2.tgz -o ~/.m2/repository/com/github/eirslett/npm/7.11.2/npm-7.11.2.tar.gz
+          # Versions come from the poms (see above); fall back to the last known pair if none was found
+          [ -s "${RUNNER_TEMP}/frontend-versions" ] || echo "${node_fallback_version} ${npm_fallback_version}" > "${RUNNER_TEMP}/frontend-versions"
+          m2="${HOME}/.m2/repository/com/github/eirslett"
+          sort -u "${RUNNER_TEMP}/frontend-versions" | while read -r node_v npm_v; do
+            echo "node ${node_v} / npm ${npm_v}"
+            mkdir -p "${m2}/node/${node_v}" "${m2}/npm/${npm_v}"
+            curl -fsSL --retry 3 "https://nodejs.org/dist/v${node_v}/node-v${node_v}-linux-x64.tar.gz" -o "${m2}/node/${node_v}/node-${node_v}-linux-x64.tar.gz"
+            curl -fsSL --retry 3 "https://registry.npmjs.org/npm/-/npm-${npm_v}.tgz" -o "${m2}/npm/${npm_v}/npm-${npm_v}.tar.gz"
+          done
       - name: Cleanup Meeds and eXo artifacts
         run: |
           rm -rf ~/.m2/repository/io/meeds
