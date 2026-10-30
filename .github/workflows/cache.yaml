@@ -1,6 +1,11 @@
 name: "Generate maven cache"
 on:
   workflow_dispatch:
+    inputs:
+      fresh:
+        description: "Rebuild the cache from scratch instead of updating the previous one"
+        type: boolean
+        default: false
   schedule:
     - cron: "0 0 * * *"
 permissions:
@@ -11,6 +16,8 @@ env:
   GH_M2_CACHE: generic-m2-repository
   jdk_major_version: 21
   maven_version: 3.9.16
+  # Above this size (KB, uncompressed) warn: GitHub caps a repository at 10 GB and evicts silently
+  cache_warn_kb: 8388608
   repos_list: |
     Meeds-io/maven-parent-pom
     Meeds-io/maven-depmgt-pom
@@ -63,6 +70,24 @@ jobs:
         run: |
           mkdir -p ~/.m2
           curl -fsSL --retry 3 "${SETTINGS_XML_URL}" -o ~/.m2/settings.xml
+      # Nightly runs update the previous cache (incremental, light on Nexus); Sundays and
+      # manual runs with "fresh" start from empty so stale artifacts do not accumulate.
+      - name: Decide between incremental and fresh cache
+        run: |
+          if [ "${{ inputs.fresh }}" = "true" ] || { [ "${GITHUB_EVENT_NAME}" = "schedule" ] && [ "$(date -u +%u)" = "7" ]; }; then
+            echo "FRESH_CACHE=true" >> "${GITHUB_ENV}"
+            echo "Fresh cache rebuild" | tee -a "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "FRESH_CACHE=false" >> "${GITHUB_ENV}"
+            echo "Incremental cache update" | tee -a "${GITHUB_STEP_SUMMARY}"
+          fi
+      - name: Restore previous Maven artifacts Cache
+        if: env.FRESH_CACHE != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/repository
+          key: ${{ env.GH_M2_CACHE }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ env.GH_M2_CACHE }}-
       - name: Download maven artifacts
         run: |
           # A repo that cannot be resolved (renamed, private, broken pom) must not
@@ -99,10 +124,19 @@ jobs:
           rm -rf ~/.m2/repository/io/meeds
           rm -rf ~/.m2/repository/org/exoplatform
           rm -rf ~/.m2/repository/com/exoplatform
+      # A failed lookup recorded at cache time would be replayed by every later build, and
+      # _remote.repositories ties artifacts to the repository ids used here.
+      - name: Strip resolver metadata
+        run: |
+          find ~/.m2/repository \( -name '*.lastUpdated' -o -name 'resolver-status.properties' -o -name '_remote.repositories' \) -type f -delete
       - name: Report cache size
         run: |
           # The cache is one entry per repository and capped by GitHub (10 GB): watch the growth
           du -sh ~/.m2/repository | tee -a "${GITHUB_STEP_SUMMARY}"
+          size_kb="$(du -sk ~/.m2/repository | cut -f1)"
+          if [ "${size_kb}" -gt "${cache_warn_kb}" ]; then
+            echo "::warning title=Cache::Maven cache is ${size_kb} KB, close to the 10 GB GitHub limit: older entries may be evicted"
+          fi
       # Save under a unique key first, then drop the older entries: there is never
       # a moment without a usable cache (provision restores by key prefix).
       - name: Save Maven artifacts Cache
