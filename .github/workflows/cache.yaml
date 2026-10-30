@@ -20,6 +20,10 @@ env:
   npm_fallback_version: 11.20.0
   # Above this size (KB, uncompressed) warn: GitHub caps a repository at 10 GB and evicts silently
   cache_warn_kb: 8388608
+  # Meeds and eXo artifacts are removed before the save (builds fetch them from Nexus): do not
+  # download them. Matched by prefix, so subgroups (io.meeds.kernel, ...) are covered. Their poms are
+  # still resolved to compute the third-party transitive dependencies, which are kept.
+  excluded_groups: io.meeds,org.exoplatform,com.exoplatform
   # Repositories resolved offline before saving, to prove the cache is usable
   smoke_repos: "Meeds-io/maven-parent-pom Meeds-io/kernel"
   repos_list: |
@@ -106,7 +110,7 @@ jobs:
              repo="${workdir}/${fullrepo##*/}"
              echo "::group::${fullrepo}"
              if git clone -q --depth 1 "https://github.com/${fullrepo}" "${repo}" \
-                && (cd "${repo}" && mvn -B -ntp dependency:go-offline); then
+                && (cd "${repo}" && mvn -B -ntp dependency:go-offline -DexcludeGroupIds="${excluded_groups}"); then
                echo "OK ${fullrepo}"
                # node/npm bundles are fetched by frontend-maven-plugin at build time, not by
                # go-offline: record the versions this repo resolves (inherited from its parent pom)
@@ -151,7 +155,7 @@ jobs:
             fi
             echo "::group::${fullrepo}"
             git clone -q --depth 1 "https://github.com/${fullrepo}" "${workdir}/${fullrepo##*/}"
-            if ! (cd "${workdir}/${fullrepo##*/}" && mvn -o -B -ntp dependency:resolve); then
+            if ! (cd "${workdir}/${fullrepo##*/}" && mvn -o -B -ntp dependency:go-offline -DexcludeGroupIds="${excluded_groups}"); then
               echo "::error title=Cache::${fullrepo} does not resolve offline from the downloaded artifacts: cache not saved"
               exit 1
             fi
