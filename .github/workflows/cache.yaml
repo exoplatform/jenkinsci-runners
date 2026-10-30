@@ -20,6 +20,8 @@ env:
   npm_fallback_version: 11.20.0
   # Above this size (KB, uncompressed) warn: GitHub caps a repository at 10 GB and evicts silently
   cache_warn_kb: 8388608
+  # Repositories resolved offline before saving, to prove the cache is usable
+  smoke_repos: "Meeds-io/maven-parent-pom Meeds-io/kernel"
   repos_list: |
     Meeds-io/maven-parent-pom
     Meeds-io/maven-depmgt-pom
@@ -135,6 +137,29 @@ jobs:
             curl -fsSL --retry 3 "https://nodejs.org/dist/v${node_v}/node-v${node_v}-linux-x64.tar.gz" -o "${m2}/node/${node_v}/node-${node_v}-linux-x64.tar.gz"
             curl -fsSL --retry 3 "https://registry.npmjs.org/npm/-/npm-${npm_v}.tgz" -o "${m2}/npm/${npm_v}/npm-${npm_v}.tar.gz"
           done
+      # Runs before the cleanup (which removes the Meeds/eXo artifacts these repos need): it
+      # checks that what was downloaded is complete. Failing here skips the save, so the
+      # previous cache entry stays the one provision restores.
+      - name: Offline smoke test
+        run: |
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "${workdir}"' EXIT
+          for fullrepo in ${smoke_repos}; do
+            if grep -qx "${fullrepo}" "${RUNNER_TEMP}/failed-repos"; then
+              echo "Skipping ${fullrepo}: it was not resolved above"
+              continue
+            fi
+            echo "::group::${fullrepo}"
+            git clone -q --depth 1 "https://github.com/${fullrepo}" "${workdir}/${fullrepo##*/}"
+            if ! (cd "${workdir}/${fullrepo##*/}" && mvn -o -B -ntp dependency:resolve); then
+              echo "::error title=Cache::${fullrepo} does not resolve offline from the downloaded artifacts: cache not saved"
+              exit 1
+            fi
+            echo "::endgroup::"
+          done
+        env:
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
       - name: Cleanup Meeds and eXo artifacts
         run: |
           rm -rf ~/.m2/repository/io/meeds
