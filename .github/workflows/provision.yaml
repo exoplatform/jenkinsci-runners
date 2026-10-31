@@ -66,16 +66,17 @@ jobs:
           JENKINS_JOB_NAME: ${{ inputs.JENKINS_JOB_NAME }}
           MAVEN_VERSION: ${{ inputs.maven_version }}
           JDK_MAJOR_VERSION: ${{ inputs.jdk_major_version }}
-      # Hack: Maximize Disk space for big & legacy projects (May become unsupported in future Azure runner releases)
+      # Hack: free disk space for big & legacy projects (e.g. jcr). Only removes software on the root
+      # disk: it works on runner images without a separate /mnt temp disk, which the previous
+      # easimon/maximize-build-space action required (it failed with "fallocate: invalid length").
       - name: Maximize build space
-        uses: easimon/maximize-build-space@fc881a613ad2a34aca9c9624518214ebc21dfc0c # v10
+        uses: AdityaGarg8/remove-unwanted-software@90e01b21170618765a73370fcc3abbd1684a7793 # v5
         if: ${{ inputs.maximize_build_space == true }}
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 2048
-          swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
