@@ -27,7 +27,7 @@ on:
         type: number
       maven_version:
         description: Maven version
-        default: "3.10.0"
+        default: "3.10.1"
         required: false
         type: string
       jdk_major_version:
